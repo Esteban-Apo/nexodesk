@@ -1,5 +1,11 @@
 # React + TypeScript + Vite
 
+## NexoDesk: configuración local
+
+La aplicación consulta `GET /api/health`. Configura la URL base con `VITE_API_URL`; si no se define, el frontend usa `http://localhost:3000`. Puedes crear `frontend/.env.local` a partir de `.env.example`. Las variables `VITE_*` son visibles en el navegador y no deben contener secretos.
+
+Para probar localmente, inicia primero el backend en `http://localhost:3000` y luego ejecuta `npm run dev` desde `frontend/`. El backend permite solicitudes CORS desde `http://localhost:5173`.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:
