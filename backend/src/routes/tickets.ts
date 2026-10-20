@@ -165,4 +165,28 @@ ticketsRouter.get(
   },
 )
 
+ticketsRouter.get(
+  '/:code',
+  async (
+    req: Request<{ code: string }, unknown, unknown>,
+    res: Response<unknown>,
+  ) => {
+    try {
+      const ticket = await prisma.ticket.findUnique({
+        where: { code: req.params.code },
+        select: ticketSelect,
+      })
+
+      if (!ticket) {
+        return res.status(404).json({ error: 'No se encontró el ticket solicitado.' })
+      }
+
+      return res.status(200).json(ticket)
+    } catch (error: unknown) {
+      logDatabaseError('GET /api/tickets/:code', error)
+      return res.status(500).json({ error: 'No se pudo consultar el ticket.' })
+    }
+  },
+)
+
 export default ticketsRouter

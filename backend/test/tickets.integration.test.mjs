@@ -160,6 +160,24 @@ test('POST crea el ticket y PostgreSQL lo conserva; GET lo devuelve', async (con
   assert.equal(listResponse.status, 200)
   assert.ok(Array.isArray(tickets))
   assert.ok(tickets.some((item) => item.id === ticket.id))
+
+  const detailResponse = await fetch(`${baseUrl}/api/tickets/${encodeURIComponent(ticket.code)}`)
+  const detail = await detailResponse.json()
+  assert.equal(detailResponse.status, 200)
+  assert.deepEqual(detail, ticket)
+  assert.equal(detail.id, ticket.id)
+  assert.equal(detail.updatedAt, ticket.updatedAt)
+})
+
+test('GET /api/tickets/:code devuelve 404 cuando el ticket no existe', async (context) => {
+  if (!canRunDatabaseTest(context)) return
+
+  const missingCode = `NX-NOT-FOUND-${Date.now()}`
+  const response = await fetch(`${baseUrl}/api/tickets/${encodeURIComponent(missingCode)}`)
+  const body = await response.json()
+
+  assert.equal(response.status, 404)
+  assert.equal(body.error, 'No se encontró el ticket solicitado.')
 })
 
 test('solicitudes concurrentes reciben códigos diferentes', async (context) => {
