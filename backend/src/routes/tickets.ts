@@ -1,6 +1,8 @@
 import { Router, type Request, type Response } from 'express'
 import { Prisma, TicketPriority, TicketStatus } from '../generated/prisma/client.js'
+import { TICKET_CREATION_ROLES, TICKET_STATUS_ROLES, ticketVisibilityWhere } from '../auth/authorization.js'
 import { prisma } from '../lib/prisma.js'
+import { requireAuth, requireCsrf, requireRoles } from '../middleware/auth.js'
 
 type TicketInput = {
   title: string
@@ -130,12 +132,22 @@ export function validateTicketInput(input: unknown): TicketInputResult {
 
 const ticketsRouter = Router()
 
+// Todas las operaciones de tickets, incluida su lectura, requieren una sesión.
+ticketsRouter.use(requireAuth)
+
 ticketsRouter.post(
   '/',
+  requireCsrf,
+  requireRoles(...TICKET_CREATION_ROLES),
   async (
     req: Request<Record<string, never>, unknown, unknown>,
     res: Response<unknown>,
   ) => {
+    const authenticatedUserId = req.auth?.userId
+    if (!authenticatedUserId) {
+      return res.status(401).json({ error: 'Se requiere una sesión válida.' })
+    }
+
     const validation = validateTicketInput(req.body)
     if (!validation.valid) {
       return res.status(400).json({ error: validation.error })
@@ -150,7 +162,8 @@ ticketsRouter.post(
         data: {
           ...validation.value,
           code,
-          activities: { create: { toStatus: TicketStatus.OPEN } },
+          createdById: authenticatedUserId,
+          activities: { create: { toStatus: TicketStatus.OPEN, actorUserId: authenticatedUserId } },
         },
         select: ticketSelect,
       })
@@ -171,6 +184,7 @@ ticketsRouter.get(
   ) => {
     try {
       const tickets = await prisma.ticket.findMany({
+        where: ticketVisibilityWhere(_req.auth!),
         select: ticketSelect,
         orderBy: { createdAt: 'desc' },
         take: 50,
@@ -191,8 +205,8 @@ ticketsRouter.get(
     res: Response<unknown>,
   ) => {
     try {
-      const ticket = await prisma.ticket.findUnique({
-        where: { code: req.params.code },
+      const ticket = await prisma.ticket.findFirst({
+        where: { code: req.params.code, ...ticketVisibilityWhere(req.auth!) },
         select: ticketDetailSelect,
       })
 
@@ -210,10 +224,17 @@ ticketsRouter.get(
 
 ticketsRouter.patch(
   '/:code/status',
+  requireCsrf,
+  requireRoles(...TICKET_STATUS_ROLES),
   async (
     req: Request<{ code: string }, unknown, unknown>,
     res: Response<unknown>,
   ) => {
+    const authenticatedUserId = req.auth?.userId
+    if (!authenticatedUserId) {
+      return res.status(401).json({ error: 'Se requiere una sesión válida.' })
+    }
+
     if (!isRecord(req.body) || !isTicketStatus(req.body.status)) {
       return res.status(400).json({
         error: `status debe ser uno de estos valores: ${[...allowedStatuses].join(', ')}.`,
@@ -224,8 +245,8 @@ ticketsRouter.patch(
 
     try {
       const result = await prisma.$transaction(async (transaction) => {
-        const current = await transaction.ticket.findUnique({
-          where: { code: req.params.code },
+        const current = await transaction.ticket.findFirst({
+          where: { code: req.params.code, ...ticketVisibilityWhere(req.auth!) },
           select: { id: true, status: true },
         })
 
@@ -241,7 +262,12 @@ ticketsRouter.patch(
         if (changed.count !== 1) return { kind: 'conflict' as const }
 
         await transaction.ticketActivity.create({
-          data: { ticketId: current.id, fromStatus: current.status, toStatus: nextStatus },
+          data: {
+            ticketId: current.id,
+            fromStatus: current.status,
+            toStatus: nextStatus,
+            actorUserId: authenticatedUserId,
+          },
         })
         const ticket = await transaction.ticket.findUnique({
           where: { id: current.id },

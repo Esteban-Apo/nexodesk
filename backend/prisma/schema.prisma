@@ -21,6 +21,53 @@ enum TicketPriority {
   URGENT
 }
 
+enum UserRole {
+  ADMIN
+  REQUESTER
+  TECHNICIAN
+}
+
+model User {
+  id              String           @id @default(uuid()) @db.Uuid
+  name            String           @db.VarChar(120)
+  email           String           @unique @db.VarChar(320)
+  passwordHash    String?          @db.VarChar(255)
+  role            UserRole         @default(REQUESTER)
+  isActive         Boolean          @default(true)
+  emailVerifiedAt DateTime?        @db.Timestamptz(3)
+  createdAt       DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime         @updatedAt @db.Timestamptz(3)
+  sessions        Session[]
+  identities      AuthIdentity[]
+  createdTickets  Ticket[]         @relation("TicketCreator")
+  activities      TicketActivity[] @relation("ActivityActor")
+}
+
+model Session {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @db.Uuid
+  tokenHash      String    @unique @db.Char(64)
+  csrfTokenHash  String    @db.Char(64)
+  expiresAt      DateTime  @db.Timestamptz(3)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(3)
+  revokedAt      DateTime? @db.Timestamptz(3)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+}
+
+model AuthIdentity {
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String   @db.Uuid
+  provider       String   @db.VarChar(50)
+  providerSubject String  @db.VarChar(255)
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerSubject])
+  @@index([userId])
+}
+
 model Ticket {
   id          String         @id @default(uuid()) @db.Uuid
   code        String         @unique @db.VarChar(20)
@@ -30,18 +77,24 @@ model Ticket {
   priority    TicketPriority @default(MEDIUM)
   createdAt   DateTime       @default(now()) @db.Timestamptz(3)
   updatedAt   DateTime       @updatedAt @db.Timestamptz(3)
+  createdById String?        @db.Uuid
+  createdBy   User?          @relation("TicketCreator", fields: [createdById], references: [id], onDelete: SetNull)
   activities  TicketActivity[]
 
   @@index([status, createdAt])
+  @@index([createdById])
 }
 
 model TicketActivity {
-  id         String       @id @default(uuid()) @db.Uuid
-  ticketId   String       @db.Uuid
-  fromStatus TicketStatus?
-  toStatus   TicketStatus
-  createdAt  DateTime     @default(now()) @db.Timestamptz(3)
-  ticket     Ticket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  id           String       @id @default(uuid()) @db.Uuid
+  ticketId     String       @db.Uuid
+  fromStatus   TicketStatus?
+  toStatus     TicketStatus
+  createdAt    DateTime     @default(now()) @db.Timestamptz(3)
+  actorUserId  String?      @db.Uuid
+  ticket       Ticket       @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  actor        User?        @relation("ActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([ticketId, createdAt])
+  @@index([actorUserId])
 }
