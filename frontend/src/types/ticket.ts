@@ -13,6 +13,14 @@ export type Ticket = {
   priority: TicketPriority
   createdAt: string
   updatedAt: string
+  activities?: TicketActivity[]
+}
+
+export type TicketActivity = {
+  id: string
+  fromStatus: TicketStatus | null
+  toStatus: TicketStatus
+  createdAt: string
 }
 
 export const priorityLabels: Record<TicketPriority, string> = {

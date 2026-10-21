@@ -4,6 +4,7 @@ import {
   ticketStatuses,
   type CreateTicketInput,
   type Ticket,
+  type TicketActivity,
   type TicketPriority,
   type TicketStatus,
 } from '../types/ticket'
@@ -33,6 +34,30 @@ function parseTicket(value: unknown): Ticket {
     throw new ApiError('La API devolvió un ticket con un formato inesperado.')
   }
 
+  let activities: TicketActivity[] | undefined
+  if (value.activities !== undefined) {
+    if (
+      !Array.isArray(value.activities) ||
+      !value.activities.every(
+        (activity) =>
+          isRecord(activity) &&
+          typeof activity.id === 'string' &&
+          (activity.fromStatus === null || isTicketStatus(activity.fromStatus)) &&
+          isTicketStatus(activity.toStatus) &&
+          typeof activity.createdAt === 'string' &&
+          !Number.isNaN(Date.parse(activity.createdAt)),
+      )
+    ) {
+      throw new ApiError('La API devolvió un historial con un formato inesperado.')
+    }
+    activities = value.activities.map((activity) => ({
+      id: activity.id,
+      fromStatus: activity.fromStatus as TicketStatus | null,
+      toStatus: activity.toStatus as TicketStatus,
+      createdAt: activity.createdAt as string,
+    }))
+  }
+
   return {
     id: value.id,
     code: value.code,
@@ -42,6 +67,7 @@ function parseTicket(value: unknown): Ticket {
     priority: value.priority,
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
+    ...(activities ? { activities } : {}),
   }
 }
 
@@ -85,6 +111,29 @@ export async function createTicket(
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(input),
+    signal,
+  })
+  if (!response.ok) throw await readApiError(response)
+
+  let payload: unknown
+  try {
+    payload = await response.json()
+  } catch {
+    throw new ApiError('La API devolvió una respuesta JSON inválida.')
+  }
+
+  return parseTicket(payload)
+}
+
+export async function changeTicketStatus(
+  code: string,
+  status: TicketStatus,
+  signal?: AbortSignal,
+): Promise<Ticket> {
+  const response = await fetch(`${API_BASE_URL}/api/tickets/${encodeURIComponent(code)}/status`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status }),
     signal,
   })
   if (!response.ok) throw await readApiError(response)

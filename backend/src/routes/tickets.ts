@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from 'express'
-import { Prisma, TicketPriority } from '../generated/prisma/client.js'
+import { Prisma, TicketPriority, TicketStatus } from '../generated/prisma/client.js'
 import { prisma } from '../lib/prisma.js'
 
 type TicketInput = {
@@ -13,6 +13,13 @@ type TicketInputResult =
   | { valid: false; error: string }
 
 const allowedPriorities = new Set<string>(Object.values(TicketPriority))
+const allowedStatuses = new Set<string>(Object.values(TicketStatus))
+const validStatusTransitions: Record<TicketStatus, readonly TicketStatus[]> = {
+  [TicketStatus.OPEN]: [TicketStatus.IN_PROGRESS],
+  [TicketStatus.IN_PROGRESS]: [TicketStatus.OPEN, TicketStatus.RESOLVED],
+  [TicketStatus.RESOLVED]: [TicketStatus.IN_PROGRESS],
+  [TicketStatus.CLOSED]: [],
+}
 const serverManagedFields = ['id', 'code', 'status', 'createdAt', 'updatedAt'] as const
 const ticketSelect = {
   id: true,
@@ -24,9 +31,20 @@ const ticketSelect = {
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.TicketSelect
+const ticketDetailSelect = {
+  ...ticketSelect,
+  activities: {
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, fromStatus: true, toStatus: true, createdAt: true },
+  },
+} satisfies Prisma.TicketSelect
 
 function isTicketPriority(value: unknown): value is TicketPriority {
   return typeof value === 'string' && allowedPriorities.has(value)
+}
+
+function isTicketStatus(value: unknown): value is TicketStatus {
+  return typeof value === 'string' && allowedStatuses.has(value)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -132,6 +150,7 @@ ticketsRouter.post(
         data: {
           ...validation.value,
           code,
+          activities: { create: { toStatus: TicketStatus.OPEN } },
         },
         select: ticketSelect,
       })
@@ -174,7 +193,7 @@ ticketsRouter.get(
     try {
       const ticket = await prisma.ticket.findUnique({
         where: { code: req.params.code },
-        select: ticketSelect,
+        select: ticketDetailSelect,
       })
 
       if (!ticket) {
@@ -185,6 +204,68 @@ ticketsRouter.get(
     } catch (error: unknown) {
       logDatabaseError('GET /api/tickets/:code', error)
       return res.status(500).json({ error: 'No se pudo consultar el ticket.' })
+    }
+  },
+)
+
+ticketsRouter.patch(
+  '/:code/status',
+  async (
+    req: Request<{ code: string }, unknown, unknown>,
+    res: Response<unknown>,
+  ) => {
+    if (!isRecord(req.body) || !isTicketStatus(req.body.status)) {
+      return res.status(400).json({
+        error: `status debe ser uno de estos valores: ${[...allowedStatuses].join(', ')}.`,
+      })
+    }
+
+    const nextStatus = req.body.status
+
+    try {
+      const result = await prisma.$transaction(async (transaction) => {
+        const current = await transaction.ticket.findUnique({
+          where: { code: req.params.code },
+          select: { id: true, status: true },
+        })
+
+        if (!current) return { kind: 'not-found' as const }
+        if (!validStatusTransitions[current.status].includes(nextStatus)) {
+          return { kind: 'invalid-transition' as const, status: current.status }
+        }
+
+        const changed = await transaction.ticket.updateMany({
+          where: { id: current.id, status: current.status },
+          data: { status: nextStatus },
+        })
+        if (changed.count !== 1) return { kind: 'conflict' as const }
+
+        await transaction.ticketActivity.create({
+          data: { ticketId: current.id, fromStatus: current.status, toStatus: nextStatus },
+        })
+        const ticket = await transaction.ticket.findUnique({
+          where: { id: current.id },
+          select: ticketDetailSelect,
+        })
+        return ticket ? { kind: 'updated' as const, ticket } : { kind: 'not-found' as const }
+      })
+
+      if (result.kind === 'not-found') {
+        return res.status(404).json({ error: 'No se encontró el ticket solicitado.' })
+      }
+      if (result.kind === 'invalid-transition') {
+        return res.status(409).json({
+          error: `No se permite cambiar el ticket de ${result.status} a ${nextStatus}.`,
+        })
+      }
+      if (result.kind === 'conflict') {
+        return res.status(409).json({ error: 'El ticket cambió de estado. Vuelve a cargarlo e intenta de nuevo.' })
+      }
+
+      return res.status(200).json(result.ticket)
+    } catch (error: unknown) {
+      logDatabaseError('PATCH /api/tickets/:code/status', error)
+      return res.status(500).json({ error: 'No se pudo actualizar el estado del ticket.' })
     }
   },
 )

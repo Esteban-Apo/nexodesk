@@ -67,6 +67,14 @@ async function postTicket(body) {
   })
 }
 
+async function patchTicketStatus(code, status) {
+  return fetch(`${baseUrl}/api/tickets/${encodeURIComponent(code)}/status`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ status }),
+  })
+}
+
 function canRunDatabaseTest(context) {
   if (!serverAvailable) {
     context.skip('El entorno no permite abrir un puerto local para pruebas HTTP.')
@@ -164,9 +172,44 @@ test('POST crea el ticket y PostgreSQL lo conserva; GET lo devuelve', async (con
   const detailResponse = await fetch(`${baseUrl}/api/tickets/${encodeURIComponent(ticket.code)}`)
   const detail = await detailResponse.json()
   assert.equal(detailResponse.status, 200)
-  assert.deepEqual(detail, ticket)
   assert.equal(detail.id, ticket.id)
+  assert.equal(detail.code, ticket.code)
+  assert.equal(detail.status, ticket.status)
   assert.equal(detail.updatedAt, ticket.updatedAt)
+  assert.deepEqual(
+    detail.activities.map(({ fromStatus, toStatus }) => ({ fromStatus, toStatus })),
+    [{ fromStatus: null, toStatus: 'OPEN' }],
+  )
+
+  const forbiddenTransition = await patchTicketStatus(ticket.code, 'RESOLVED')
+  assert.equal(forbiddenTransition.status, 409)
+
+  const invalidStatus = await patchTicketStatus(ticket.code, 'WAITING')
+  assert.equal(invalidStatus.status, 400)
+
+  for (const status of ['IN_PROGRESS', 'RESOLVED', 'IN_PROGRESS']) {
+    const changeResponse = await patchTicketStatus(ticket.code, status)
+    const changedTicket = await changeResponse.json()
+    assert.equal(changeResponse.status, 200)
+    assert.equal(changedTicket.status, status)
+    assert.equal(changedTicket.activities.at(-1).toStatus, status)
+    assert.equal(changedTicket.activities.at(-1).fromStatus, detail.activities.at(-1).toStatus)
+    detail.activities = changedTicket.activities
+  }
+
+  const activityRows = await prisma.ticketActivity.findMany({
+    where: { ticketId: ticket.id },
+    orderBy: { createdAt: 'asc' },
+  })
+  assert.deepEqual(
+    activityRows.map(({ fromStatus, toStatus }) => ({ fromStatus, toStatus })),
+    [
+      { fromStatus: null, toStatus: 'OPEN' },
+      { fromStatus: 'OPEN', toStatus: 'IN_PROGRESS' },
+      { fromStatus: 'IN_PROGRESS', toStatus: 'RESOLVED' },
+      { fromStatus: 'RESOLVED', toStatus: 'IN_PROGRESS' },
+    ],
+  )
 })
 
 test('GET /api/tickets/:code devuelve 404 cuando el ticket no existe', async (context) => {
@@ -178,6 +221,9 @@ test('GET /api/tickets/:code devuelve 404 cuando el ticket no existe', async (co
 
   assert.equal(response.status, 404)
   assert.equal(body.error, 'No se encontró el ticket solicitado.')
+
+  const statusResponse = await patchTicketStatus(missingCode, 'IN_PROGRESS')
+  assert.equal(statusResponse.status, 404)
 })
 
 test('solicitudes concurrentes reciben códigos diferentes', async (context) => {

@@ -1,6 +1,6 @@
 # Estado de desarrollo
 
-Última revisión: 19 de octubre de 2026.
+Última revisión: 20 de octubre de 2026.
 
 ## Implementado
 
@@ -15,6 +15,9 @@
 - Modelo `Ticket` con estados/prioridades enum. La migración inicial fue aplicada previamente según la confirmación del usuario.
 - Rutas `POST /api/tickets` y `GET /api/tickets`: validación, persistencia Prisma, orden descendente, selección explícita de campos y máximo de 50 resultados.
 - `GET /api/tickets/:code`: búsqueda por el campo único `code`, respuesta completa del ticket o HTTP 404 si no existe.
+- `PATCH /api/tickets/:code/status`: valida transiciones y actualiza el ticket junto con su actividad en una transacción. Las transiciones son `OPEN → IN_PROGRESS`, `IN_PROGRESS → OPEN/RESOLVED` y `RESOLVED → IN_PROGRESS`; `CLOSED` no admite transiciones nuevas.
+- Modelo `TicketActivity` para persistir los cambios de estado. La migración `20261020120000_ticket_status_activity` crea tabla, índice y relación con borrado en cascada, e inicializa el historial de tickets existentes.
+- Los tickets nuevos registran su estado inicial `OPEN`. El detalle de la API incluye el historial cronológico; React ofrece acciones según el estado y muestra la actividad en español.
 - Código público `NX-000001` asignado mediante secuencia PostgreSQL atómica y respaldado por la restricción única de `Ticket.code`.
 - Las rutas de tickets registran en el servidor el nombre, mensaje saneado y códigos seguros de Prisma/PostgreSQL ante fallos; las respuestas HTTP mantienen mensajes genéricos.
 - Middlewares `cors` (origen permitido: `http://localhost:5173`) y `express.json()`.
@@ -31,6 +34,10 @@
 - 18 de octubre, bajo restricciones de sandbox, `pg_isready` no obtuvo respuesta en `localhost:5433`; el 19 de octubre se consultó la base y se aplicó la migración de secuencia pendiente.
 - `npm run build` en `backend/` y `git diff --check`: completaron sin errores.
 - npm reportó cero vulnerabilidades durante la instalación de Prisma 7.10.1. Un `npm audit` posterior no pudo contactar el registro npm por un fallo DNS del entorno.
+- 20 de octubre: `npm run prisma:generate` y `npx prisma validate --config prisma7.config.ts` finalizaron correctamente.
+- 20 de octubre: `npm run build` del backend y frontend, `npm run lint` del frontend y `git diff --check` finalizaron sin errores.
+- 20 de octubre: `npx prisma migrate deploy --config prisma7.config.ts` aplicó `20261020120000_ticket_status_activity` en PostgreSQL (`nexodesk`, `localhost:5433`).
+- 20 de octubre: `npm test` pasó 3 pruebas de validación y 7 de integración, sin fallos ni omisiones. Se probaron transiciones permitidas y rechazadas, historial persistido, estado inválido y ticket inexistente.
 
 - `npm run build` en `backend/`: completó TypeScript sin errores.
 - `npm run build` en `frontend/`: completó TypeScript y Vite sin errores.
@@ -49,7 +56,7 @@
 
 ## Pendiente
 
-- Implementar usuarios, asignaciones, comentarios e historial de tickets.
+- Implementar usuarios, asignaciones y comentarios.
 - Definir autenticación y autorización seguras en el backend antes de exponer operaciones protegidas.
 
 ## Diagnóstico de POST /api/tickets — 19 de octubre de 2026
@@ -68,3 +75,11 @@
 - La pantalla presenta código, título, estado, prioridad, descripción completa, identificador y ambas fechas en español. Los estados y prioridades se traducen solo en la presentación.
 - `npm run build` y `npm run lint` en `frontend/`, `npm run build` en `backend/` y `git diff --check` finalizaron sin errores.
 - Se verificó en navegador un ticket existente, la carga directa tras recargar, el 404 visual para un código inexistente y el regreso al listado.
+
+## Ciclo de vida e historial de tickets — 20 de octubre de 2026
+
+- El backend responde HTTP 400 para estados inválidos, HTTP 404 para tickets inexistentes y HTTP 409 para transiciones no permitidas o conflictos concurrentes.
+- Cada cambio y su registro se guardan juntos. El historial conserva estado anterior, estado nuevo y fecha; hay un evento inicial para tickets existentes y nuevos.
+- El detalle React muestra las acciones válidas, errores de actualización y una línea cronológica en español, manteniendo la interfaz existente.
+- La migración aditiva se aplicó a la base configurada. Conserva el enum existente, incluida la compatibilidad con `CLOSED`.
+- Builds, lint, pruebas y validación Prisma de esta etapa están registrados en «Verificaciones realizadas».

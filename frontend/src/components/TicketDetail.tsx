@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ApiError, getConnectionErrorMessage } from '../services/api'
-import { getTicketByCode } from '../services/tickets'
-import { priorityLabels, statusLabels, type Ticket } from '../types/ticket'
+import { changeTicketStatus, getTicketByCode } from '../services/tickets'
+import { priorityLabels, statusLabels, type Ticket, type TicketStatus } from '../types/ticket'
 
 type DetailState =
   | { status: 'loading' }
@@ -18,10 +18,22 @@ const dateFormatter = new Intl.DateTimeFormat('es', {
   dateStyle: 'medium',
   timeStyle: 'short',
 })
+const nextStatuses: Record<TicketStatus, readonly TicketStatus[]> = {
+  OPEN: ['IN_PROGRESS'],
+  IN_PROGRESS: ['OPEN', 'RESOLVED'],
+  RESOLVED: ['IN_PROGRESS'],
+  CLOSED: [],
+}
+
+function transitionLabel(status: TicketStatus): string {
+  return status === 'IN_PROGRESS' ? 'En progreso' : statusLabels[status].toLowerCase()
+}
 
 function TicketDetail({ code, onBack }: TicketDetailProps) {
   const [state, setState] = useState<DetailState>({ status: 'loading' })
   const [retryNumber, setRetryNumber] = useState(0)
+  const [savingStatus, setSavingStatus] = useState(false)
+  const [statusError, setStatusError] = useState('')
 
   useEffect(() => {
     const controller = new AbortController()
@@ -41,6 +53,20 @@ function TicketDetail({ code, onBack }: TicketDetailProps) {
 
     return () => controller.abort()
   }, [code, retryNumber])
+
+  async function updateStatus(status: TicketStatus) {
+    if (state.status !== 'loaded' || savingStatus) return
+    setSavingStatus(true)
+    setStatusError('')
+    try {
+      const ticket = await changeTicketStatus(code, status)
+      setState({ status: 'loaded', ticket })
+    } catch (error: unknown) {
+      setStatusError(getConnectionErrorMessage(error))
+    } finally {
+      setSavingStatus(false)
+    }
+  }
 
   return (
     <main className="page-content detail-page">
@@ -110,6 +136,25 @@ function TicketDetail({ code, onBack }: TicketDetailProps) {
                 {dateFormatter.format(new Date(state.ticket.createdAt))}
               </time>
             </p>
+            <div className="status-actions" aria-label="Cambiar estado del ticket">
+              <span className="status-actions-label">Cambiar estado</span>
+              {nextStatuses[state.ticket.status].length > 0 ? (
+                nextStatuses[state.ticket.status].map((status) => (
+                  <button
+                    className="secondary-button status-action"
+                    key={status}
+                    type="button"
+                    disabled={savingStatus}
+                    onClick={() => void updateStatus(status)}
+                  >
+                    {savingStatus ? 'Actualizando…' : `Pasar a ${transitionLabel(status)}`}
+                  </button>
+                ))
+              ) : (
+                <span className="status-actions-note">Este ticket no admite más cambios de estado.</span>
+              )}
+            </div>
+            {statusError && <p className="status-error" role="alert">{statusError}</p>}
           </section>
 
           <div className="detail-grid">
@@ -146,6 +191,34 @@ function TicketDetail({ code, onBack }: TicketDetailProps) {
               </dl>
             </aside>
           </div>
+
+          <section className="panel activity-panel" aria-labelledby="activity-title">
+            <div className="detail-section-heading">
+              <span className="detail-section-icon detail-section-icon--blue" aria-hidden="true">↻</span>
+              <h2 id="activity-title">Historial de actividad</h2>
+            </div>
+            {(state.ticket.activities ?? []).length > 0 ? (
+              <ol className="activity-list">
+                {(state.ticket.activities ?? []).map((activity) => (
+                  <li className="activity-item" key={activity.id}>
+                    <span className="activity-marker" aria-hidden="true" />
+                    <div>
+                      <p>
+                        {activity.fromStatus
+                          ? <>Estado cambiado de <strong>{statusLabels[activity.fromStatus]}</strong> a <strong>{statusLabels[activity.toStatus]}</strong></>
+                          : <>Solicitud creada con estado <strong>{statusLabels[activity.toStatus]}</strong></>}
+                      </p>
+                      <time dateTime={activity.createdAt}>
+                        {dateFormatter.format(new Date(activity.createdAt))}
+                      </time>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="activity-empty">Todavía no hay actividad registrada para esta solicitud.</p>
+            )}
+          </section>
         </>
       )}
     </main>
